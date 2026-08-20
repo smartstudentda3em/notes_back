@@ -16,8 +16,8 @@ class DatabaseSeeder extends Seeder
     public function run(): void
     {
         // 1) حساب مدير المطبعة — البيانات من ملف الإعدادات (.env / docker-compose)
-        $adminPhone    = env('ADMIN_PHONE', '67793717');
-        $adminPassword = env('ADMIN_PASSWORD', 'Makroom204');
+        $adminPhone    = env('ADMIN_PHONE', '99970766');
+        $adminPassword = env('ADMIN_PASSWORD', 'Ayman987654');
 
         $admin = User::updateOrCreate(
             ['phone' => $adminPhone],
