@@ -11,7 +11,7 @@ use App\Support\TreeBuilder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
-use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class DocumentController extends Controller
 {
@@ -90,11 +90,11 @@ class DocumentController extends Controller
     }
 
     /** طباعة المدرس لمذكرته هو (بثّ آمن inline). */
-    public function streamOwn(Request $request, Document $document): StreamedResponse
+    public function streamOwn(Request $request, Document $document): BinaryFileResponse
     {
         $this->authorizeOwner($request, $document);
 
-        return $this->fileResponse($document);
+        return $this->fileResponse($request, $document);
     }
 
     /* =====================================================================
@@ -115,7 +115,7 @@ class DocumentController extends Controller
      * البثّ الآمن للملف للطباعة — inline فقط، لا تحميل.
      * محمي بتوكن Sanctum + دور admin_press (يُطبَّق في الراوت).
      */
-    public function stream(Request $request, Document $document): StreamedResponse
+    public function stream(Request $request, Document $document): BinaryFileResponse
     {
         $actor = $request->user();
         $document->loadMissing('user', 'subject.schoolClass');
@@ -124,46 +124,57 @@ class DocumentController extends Controller
         abort_unless(Access::allowsTeacher($actor, $document->user), 403, 'خارج نطاق صلاحيتك.');
         abort_unless(Access::allowsStage($actor, $document->subject?->schoolClass?->stage), 403, 'مرحلة غير مسموح بها.');
 
-        // تسجيل عملية الطباعة (عدد النسخ من الطلب)
-        $copies = max(1, min((int) $request->query('copies', 1), 10000));
-        PrintLog::create([
-            'actor_id'     => $actor->id,
-            'actor_name'   => $actor->name,
-            'actor_role'   => $actor->role,
-            'teacher_id'   => $document->user_id,
-            'teacher_name' => $document->user?->name,
-            'document_id'  => $document->id,
-            'memo_title'   => $document->title,
-            'subject_name' => $document->subject?->name,
-            'class_name'   => $document->subject?->schoolClass?->name,
-            'stage'        => $document->subject?->schoolClass?->stage,
-            'copies'       => $copies,
-            'printed_at'   => now(),
-        ]);
+        // التحميل يتم على أجزاء (Range) لتفادي فشل تحميل الملفات الكبيرة على
+        // الشبكات الضعيفة؛ لذلك نُسجّل عملية الطباعة مرّة واحدة فقط (عند أول جزء).
+        $range = (string) $request->header('Range', '');
+        if ($range === '' || str_starts_with($range, 'bytes=0-')) {
+            $copies = max(1, min((int) $request->query('copies', 1), 10000));
+            PrintLog::create([
+                'actor_id'     => $actor->id,
+                'actor_name'   => $actor->name,
+                'actor_role'   => $actor->role,
+                'teacher_id'   => $document->user_id,
+                'teacher_name' => $document->user?->name,
+                'document_id'  => $document->id,
+                'memo_title'   => $document->title,
+                'subject_name' => $document->subject?->name,
+                'class_name'   => $document->subject?->schoolClass?->name,
+                'stage'        => $document->subject?->schoolClass?->stage,
+                'copies'       => $copies,
+                'printed_at'   => now(),
+            ]);
+        }
 
-        return $this->fileResponse($document);
+        return $this->fileResponse($request, $document);
     }
 
     /* ===================================================================== */
 
-    /** استجابة الملف inline المشتركة (للمطبعة وللمدرس صاحب الملف). */
-    private function fileResponse(Document $document): StreamedResponse
+    /**
+     * استجابة الملف inline المشتركة (للمطبعة وللمدرس صاحب الملف).
+     *
+     * نستخدم BinaryFileResponse (وليس بثّاً) لأنها تدعم طلبات النطاق (Range/206)
+     * تلقائياً؛ فيستطيع العميل تحميل الملف على أجزاء صغيرة، ما يعالج فشل تحميل
+     * الملفات الكبيرة ("Failed to fetch") على الشبكات الضعيفة أو خلف بروكسي فحص.
+     * تبقى الاستجابة inline (لا تنزيل) ومحمية بالمصادقة على الراوت.
+     */
+    private function fileResponse(Request $request, Document $document): BinaryFileResponse
     {
         $disk = Storage::disk(self::DISK);
 
         abort_unless($disk->exists($document->file_path), 404, 'الملف غير موجود.');
 
-        return $disk->response(
-            $document->file_path,
-            'memo.pdf',
-            [
-                'Content-Type'           => 'application/pdf',
-                'Content-Disposition'    => 'inline; filename="memo.pdf"',
-                'X-Content-Type-Options' => 'nosniff',
-                'Cache-Control'          => 'no-store, no-cache, must-revalidate, private',
-                'Pragma'                 => 'no-cache',
-            ]
-        );
+        $response = response()->file($disk->path($document->file_path), [
+            'Content-Type'           => 'application/pdf',
+            'X-Content-Type-Options' => 'nosniff',
+            'Cache-Control'          => 'no-store, no-cache, must-revalidate, private',
+            'Pragma'                 => 'no-cache',
+        ]);
+
+        // inline (عرض/طباعة) وليس attachment (تنزيل)
+        $response->setContentDisposition('inline', 'memo.pdf');
+
+        return $response;
     }
 
     private function authorizeOwner(Request $request, Document $document): void

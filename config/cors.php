@@ -13,7 +13,8 @@ return [
 
     'allowed_headers' => ['*'],
 
-    'exposed_headers' => [],
+    // نعرّض ترويسات النطاق ليقرأها العميل عند التحميل على أجزاء (طباعة الملفات الكبيرة)
+    'exposed_headers' => ['Content-Range', 'Accept-Ranges', 'Content-Length'],
 
     'max_age' => 0,
 
