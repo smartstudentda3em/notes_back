@@ -2,6 +2,7 @@
 
 namespace App\Support;
 
+use App\Models\Document;
 use App\Models\User;
 
 /**
@@ -61,5 +62,49 @@ class Access
         if ($stages !== null && ! count(array_intersect($teacher->stages ?? [], $stages))) return false;
 
         return true;
+    }
+
+    /* ===================================================================
+     |  المشاهد المقيّد (Restricted Viewer)
+     |  اصطلاح مختلف عمداً: المصفوفة الفارغة = لا يرى شيئاً (وليس الكل).
+     =================================================================== */
+
+    public static function isRestrictedViewer(User $u): bool
+    {
+        return $u->role === User::ROLE_RESTRICTED_VIEWER;
+    }
+
+    /** معرّف المدرّس الوحيد المربوط به المشاهد (null = غير مربوط = لا يرى شيئاً). */
+    public static function viewerTeacherId(User $viewer): ?int
+    {
+        return $viewer->teacher_id ? (int) $viewer->teacher_id : null;
+    }
+
+    /**
+     * معرّفات المواد المسموح للمشاهد برؤيتها. مصفوفة فارغة = لا يُسمح بشيء.
+     */
+    public static function viewerAllowedSubjectIds(User $viewer): array
+    {
+        return $viewer->viewerPermissions()
+            ->pluck('subject_id')
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * هل تقع هذه المذكرة ضمن صلاحية المشاهد؟ يُستدعى في كل طلب فتح/صفحة.
+     * الشرطان معاً: المادة ضمن مصفوفته، والمذكرة تخص مدرّسه المربوط (دفاع مزدوج).
+     */
+    public static function viewerAllowsDocument(User $viewer, Document $doc): bool
+    {
+        if (! self::isRestrictedViewer($viewer)) return false;
+
+        $teacherId = self::viewerTeacherId($viewer);
+        if ($teacherId === null) return false;
+        if ((int) $doc->user_id !== $teacherId) return false;
+
+        return in_array((int) $doc->subject_id, self::viewerAllowedSubjectIds($viewer), true);
     }
 }

@@ -16,6 +16,9 @@ class User extends Authenticatable
     /** نطاقات صلاحية المساعد. */
     public const SCOPES = ['print', 'manage'];
 
+    /** دور المشاهد المقيّد (عرض فقط ضمن مصفوفة مادة+صف). */
+    public const ROLE_RESTRICTED_VIEWER = 'restricted_viewer';
+
     protected $fillable = [
         'name',
         'phone',
@@ -24,6 +27,7 @@ class User extends Authenticatable
         'stages',
         'allowed_teachers',
         'scope',
+        'teacher_id',
         'is_active',
     ];
 
@@ -50,6 +54,18 @@ class User extends Authenticatable
         return $this->hasMany(SchoolClass::class);
     }
 
+    /** صفوف مصفوفة صلاحيات المشاهد المقيّد (مواد محددة). */
+    public function viewerPermissions()
+    {
+        return $this->hasMany(ViewerPermission::class);
+    }
+
+    /** المدرّس الوحيد المربوط به المشاهد المقيّد (كل محتواه محصور فيه). */
+    public function viewerTeacher()
+    {
+        return $this->belongsTo(User::class, 'teacher_id');
+    }
+
     public function isAdmin(): bool
     {
         return $this->role === 'admin_press';
@@ -63,5 +79,10 @@ class User extends Authenticatable
     public function isTeacher(): bool
     {
         return $this->role === 'teacher';
+    }
+
+    public function isRestrictedViewer(): bool
+    {
+        return $this->role === self::ROLE_RESTRICTED_VIEWER;
     }
 }

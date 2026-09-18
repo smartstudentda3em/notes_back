@@ -5,8 +5,10 @@ use App\Http\Controllers\AssistantController;
 use App\Http\Controllers\AuthController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\PrintLogController;
+use App\Http\Controllers\RestrictedViewerController;
 use App\Http\Controllers\StructureController;
 use App\Http\Controllers\TeacherController;
+use App\Http\Controllers\ViewerController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -67,7 +69,7 @@ Route::middleware(['auth:sanctum', 'throttle:240,1'])->group(function () {
         Route::get('/documents/{document}/stream',       [DocumentController::class, 'stream']);
     });
 
-    // ----- إدارة المساعدين (مدير المطبعة فقط) -----
+    // ----- إدارة المساعدين والمشاهدين (مدير المطبعة فقط) -----
     Route::middleware('role:admin_press')->prefix('admin')->group(function () {
         Route::get('/assistants',                        [AssistantController::class, 'index']);
         Route::post('/assistants',                       [AssistantController::class, 'store']);
@@ -76,7 +78,24 @@ Route::middleware(['auth:sanctum', 'throttle:240,1'])->group(function () {
         Route::patch('/assistants/{assistant}/toggle',   [AssistantController::class, 'toggleActive']);
         Route::delete('/assistants/{assistant}',         [AssistantController::class, 'destroy']);
 
+        // المشاهدون المقيّدون + مصفوفة صلاحياتهم
+        Route::get('/viewers',                           [ViewerController::class, 'index']);
+        Route::post('/viewers',                          [ViewerController::class, 'store']);
+        Route::put('/viewers/{viewer}',                  [ViewerController::class, 'update']);
+        Route::put('/viewers/{viewer}/permissions',      [ViewerController::class, 'setPermissions']);
+        Route::put('/viewers/{viewer}/password',         [ViewerController::class, 'resetPassword']);
+        Route::patch('/viewers/{viewer}/toggle',         [ViewerController::class, 'toggleActive']);
+        Route::delete('/viewers/{viewer}',               [ViewerController::class, 'destroy']);
+
         // سجلّ الطباعة وعدّاداته
         Route::get('/print-logs',                        [PrintLogController::class, 'index']);
+    });
+
+    // ----- واجهة المشاهد المقيّد (عرض صور مفلتر، بلا تحميل) -----
+    Route::middleware('role:restricted_viewer')->prefix('viewer')->group(function () {
+        Route::get('/tree',                               [RestrictedViewerController::class, 'tree']);
+        Route::get('/documents/{document}/meta',          [RestrictedViewerController::class, 'meta']);
+        Route::get('/documents/{document}/page/{page}',   [RestrictedViewerController::class, 'page'])
+            ->whereNumber('page');
     });
 });
