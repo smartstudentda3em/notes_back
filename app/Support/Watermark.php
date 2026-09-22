@@ -3,117 +3,100 @@
 namespace App\Support;
 
 /**
- * حرق علامة مائية قطرية شبه شفّافة داخل صورة صفحة PNG (الهاتف + IP + الوقت).
- * نصّ لاتيني/أرقام فقط ليُرسَم بشكل صحيح دون الحاجة لتشكيل عربي.
- * يفضّل Imagick؛ وإلا يسقط إلى GD؛ وإلا يعيد الصورة كما هي (فشل العلامة لا يمنع العرض).
+ * حرق علامة مائية خفيفة ومتفرّقة داخل صورة الصفحة: اسم المشاهد فقط (بلا هاتف/IP).
+ * يُرسَم النص العربي بشكل صحيح عبر Pango + خط Amiri (تشكيل وربط حروف سليم)،
+ * برمادي فاتح وشفافية منخفضة وتوزيع متباعد ليكون هادئاً وغير مزعج للقراءة.
+ * أي فشل (لا Imagick/Pango/خط) لا يمنع العرض — تُعاد الصورة كما هي.
  */
 class Watermark
 {
-    /** يعيد بايتات PNG للصفحة بعد ختمها بالعلامة المائية. */
-    public static function stamp(string $pngPath, string $text): string
+    private const FONT = 'Amiri';   // مثبّت في ~/.fonts على الخادم (خط عربي مفتوح)
+
+    public static function stamp(string $pngPath, string $name): string
     {
-        if (extension_loaded('imagick')) {
-            try {
-                return self::withImagick($pngPath, $text);
-            } catch (\Throwable $e) {
-                // نكمل للبديل
-            }
+        if (! extension_loaded('imagick') || trim($name) === '') {
+            return (string) file_get_contents($pngPath);
         }
 
-        if (extension_loaded('gd')) {
-            try {
-                return self::withGd($pngPath, $text);
-            } catch (\Throwable $e) {
-                // نكمل
-            }
-        }
+        self::ensureFont();
 
-        return (string) file_get_contents($pngPath);
-    }
+        try {
+            $page = new \Imagick();
+            $page->readImage($pngPath);
+            $w = $page->getImageWidth();
+            $h = $page->getImageHeight();
 
-    private static function fontFile(): ?string
-    {
-        foreach ([
-            '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-            '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
-            '/usr/share/fonts/dejavu/DejaVuSans.ttf',
-            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
-        ] as $f) {
-            if (is_file($f)) {
-                return $f;
-            }
-        }
-        return null;
-    }
+            // بلاطة نص الاسم (Amiri) رمادي فاتح على خلفية شفافة
+            $fs = max(20, (int) round($w / 32));
+            $esc = htmlspecialchars($name, ENT_QUOTES);
 
-    private static function withImagick(string $pngPath, string $text): string
-    {
-        $im = new \Imagick();
-        $im->readImage($pngPath);
-        $w = $im->getImageWidth();
-        $h = $im->getImageHeight();
+            $tile = new \Imagick();
+            $tile->setBackgroundColor(new \ImagickPixel('transparent'));
+            $tile->readImage('pango:<span font="' . self::FONT . ' ' . $fs . '" foreground="#8b9098">' . $esc . '</span>');
+            $tile->setImageFormat('png');
+            $tile->rotateImage(new \ImagickPixel('transparent'), -30);
+            // خفّة: تقليل الشفافية إلى ~13%
+            $tile->evaluateImage(\Imagick::EVALUATE_MULTIPLY, 0.13, \Imagick::CHANNEL_ALPHA);
 
-        $draw = new \ImagickDraw();
-        $font = self::fontFile();
-        if ($font) {
-            $draw->setFont($font);
-        }
-        $fs = max(16, (int) round($w / 42));
-        $draw->setFontSize($fs);
-        $draw->setFillColor(new \ImagickPixel('rgba(0,0,0,0.12)'));
-        $draw->setGravity(\Imagick::GRAVITY_NORTHWEST);
+            $tw = $tile->getImageWidth();
+            $th = $tile->getImageHeight();
 
-        $stepY = (int) round($fs * 9);
-        $stepX = (int) round($fs * 24);
-        for ($y = -$stepY; $y < $h + $stepY; $y += $stepY) {
-            for ($x = -$stepX; $x < $w + $stepX; $x += $stepX) {
-                $im->annotateImage($draw, $x, $y, -30, $text);
-            }
-        }
-
-        $im->setImageFormat('png');
-        $blob = $im->getImageBlob();
-        $im->clear();
-        $im->destroy();
-
-        return $blob;
-    }
-
-    private static function withGd(string $pngPath, string $text): string
-    {
-        $src = imagecreatefrompng($pngPath);
-        $w = imagesx($src);
-        $h = imagesy($src);
-        imagealphablending($src, true);
-
-        $font = self::fontFile();
-        $color = imagecolorallocatealpha($src, 0, 0, 0, 108); // شبه شفّاف
-
-        if ($font) {
-            $fs = max(12, (int) round($w / 60));
-            $stepY = (int) round($fs * 10);
-            $stepX = (int) round($fs * 26);
-            for ($y = 0; $y < $h + $stepY; $y += $stepY) {
-                for ($x = -$stepX; $x < $w + $stepX; $x += $stepX) {
-                    imagettftext($src, $fs, 30, $x, $y, $color, $font, $text);
+            // توزيع متفرّق (قليل الكثافة): مسافات واسعة + إزاحة صفوف للتبعثر
+            $stepX = max($tw + 140, (int) round($w * 0.52));
+            $stepY = max($th + 140, (int) round($h * 0.30));
+            $row = 0;
+            for ($y = -$th; $y < $h + $th; $y += $stepY) {
+                $offset = ($row % 2) ? (int) round($stepX / 2) : 0;
+                for ($x = -$tw + $offset; $x < $w + $tw; $x += $stepX) {
+                    $page->compositeImage($tile, \Imagick::COMPOSITE_OVER, (int) $x, (int) $y);
                 }
+                $row++;
             }
-        } else {
-            // بلا خط TTF: خط GD النقطي المدمج (لاتيني فقط)
-            $stepY = 120;
-            $stepX = 420;
-            for ($y = 0; $y < $h; $y += $stepY) {
-                for ($x = 0; $x < $w; $x += $stepX) {
-                    imagestring($src, 5, $x, $y, $text, $color);
-                }
-            }
+
+            $page->setImageFormat('png');
+            $blob = $page->getImageBlob();
+
+            $tile->clear(); $tile->destroy();
+            $page->clear(); $page->destroy();
+
+            return $blob;
+        } catch (\Throwable $e) {
+            // فشل الختم (خط مفقود مثلاً) → لا نكسر العرض
+            return (string) file_get_contents($pngPath);
         }
+    }
 
-        ob_start();
-        imagepng($src);
-        $blob = (string) ob_get_clean();
-        imagedestroy($src);
+    /**
+     * self-heal: يضمن وجود خط Amiri العربي في ~/.fonts (ينسخه من المستودع ويحدّث
+     * كاش الخطوط إن غاب) حتى لا تنكسر العلامة المائية صامتةً بعد إعادة بناء الخادم.
+     * يعمل مرّة واحدة فقط (يتخطّى فوراً إن كان الخط موجوداً).
+     */
+    private static function ensureFont(): void
+    {
+        try {
+            $home = getenv('HOME') ?: null;
+            if (! $home) {
+                return;
+            }
+            $dest = $home . '/.fonts/Amiri-Regular.ttf';
+            if (is_file($dest)) {
+                return; // موجود — لا عمل
+            }
+            $bundled = resource_path('fonts/Amiri-Regular.ttf');
+            if (! is_file($bundled)) {
+                return;
+            }
+            @mkdir(dirname($dest), 0755, true);
+            @copy($bundled, $dest);
 
-        return $blob;
+            $fc = (new \Symfony\Component\Process\ExecutableFinder())->find('fc-cache');
+            if ($fc) {
+                $p = new \Symfony\Component\Process\Process([$fc, '-f', dirname($dest)]);
+                $p->setTimeout(30);
+                $p->run();
+            }
+        } catch (\Throwable $e) {
+            // تجاهل — الختم سيسقط بأمان إن ظل الخط غائباً
+        }
     }
 }

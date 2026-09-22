@@ -8,6 +8,7 @@ use App\Support\PdfPageRenderer;
 use App\Support\ViewerTreeBuilder;
 use App\Support\Watermark;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 /**
  * واجهة "المشاهد المقيّد": قائمة مفلترة + عرض صفحات كصور مختومة بعلامة مائية.
@@ -15,6 +16,8 @@ use Illuminate\Http\Request;
  */
 class RestrictedViewerController extends Controller
 {
+    private const DISK = 'private';
+
     /** شجرة المحتوى المسموح بها (مدرّس المشاهد + مواد مصفوفته فقط). */
     public function tree(Request $request)
     {
@@ -35,25 +38,28 @@ class RestrictedViewerController extends Controller
         ]);
     }
 
-    /** صورة صفحة واحدة (PNG) مختومة بعلامة مائية (الهاتف + IP + الوقت). */
+    /** صورة صفحة واحدة (PNG) مختومة بعلامة مائية خفيفة (اسم المشاهد فقط). */
     public function page(Request $request, Document $document, int $page)
     {
         $this->authorize($request, $document); // تحقّق في كل طلب صفحة
 
-        $abs = PdfPageRenderer::pdfPath($document->file_path);
-        abort_unless(is_file($abs), 404, 'الملف غير موجود.');
-
-        $total = PdfPageRenderer::pageCount($abs);
-        abort_if($total < 1, 404, 'تعذّر قراءة المذكرة.');
-        $page = max(1, min($page, $total));
-
-        $pngPath = PdfPageRenderer::ensurePagePng($document->id, $abs, $page);
-
+        $page = max(1, $page);
         $viewer = $request->user();
-        $mark = $viewer->phone . '  •  ' . $request->ip() . '  •  ' . now()->format('Y-m-d H:i');
-        $blob = Watermark::stamp($pngPath, $mark);
+        $disk = Storage::disk(self::DISK);
 
-        return response($blob, 200, [
+        // كاش الصورة المختومة لكل (مشاهد، صفحة): الاسم ثابت فلا نُعيد الترسيم/الختم
+        // كل مرة — ما يجعل التنقّل بين الصفحات سريعاً بعد أول عرض.
+        $cacheKey = "rendered/{$document->id}/wm_{$viewer->id}/p{$page}.png";
+
+        if (! $disk->exists($cacheKey)) {
+            $abs = PdfPageRenderer::pdfPath($document->file_path);
+            abort_unless(is_file($abs), 404, 'الملف غير موجود.');
+
+            $rawPng = PdfPageRenderer::ensurePagePng($document->id, $abs, $page); // كاش خام مشترك
+            $disk->put($cacheKey, Watermark::stamp($rawPng, $viewer->name));
+        }
+
+        return response($disk->get($cacheKey), 200, [
             'Content-Type'           => 'image/png',
             'Content-Disposition'    => 'inline',
             'X-Content-Type-Options' => 'nosniff',
