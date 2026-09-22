@@ -30,12 +30,13 @@ class Watermark
             $w = $page->getImageWidth();
             $h = $page->getImageHeight();
 
-            $fs = max(20, (int) round($w / 30));
+            $fs = max(22, (int) round($w / 28));
 
             $draw = new \ImagickDraw();
             $draw->setFont($font);                 // مسار صريح → لا fontconfig
             $draw->setFontSize($fs);
-            $draw->setFillColor(new \ImagickPixel('rgba(120,126,136,0.14)')); // رمادي فاتح شفّاف
+            // رمادي واضح لكن هادئ (~24%): باين وقابل للتتبّع دون إزعاج القراءة
+            $draw->setFillColor(new \ImagickPixel('rgba(88,96,110,0.24)'));
             $draw->setStrokeColor(new \ImagickPixel('transparent'));
 
             // قياس أبعاد النص لضبط التباعد
@@ -43,9 +44,9 @@ class Watermark
             $tw = max(1, (int) round($m['textWidth']));
             $th = max(1, (int) round($m['textHeight']));
 
-            // توزيع متفرّق (قليل الكثافة): مسافات واسعة + إزاحة صفوف للتبعثر
-            $stepX = max($tw + 170, (int) round($w * 0.55));
-            $stepY = max($th + 190, (int) round($h * 0.30));
+            // توزيع متوازن: متفرّق ومريح، لكن يغطي الصفحة فلا يبدو غائباً
+            $stepX = max($tw + 110, (int) round($w * 0.44));
+            $stepY = max($th + 130, (int) round($h * 0.23));
 
             $row = 0;
             for ($y = $th; $y < $h + $stepY; $y += $stepY) {
